@@ -1,0 +1,30 @@
+// Run against a headless SiYuan kernel on :6806 (notebook id via NB env). Seeds its own doc, then exercises load, convert-to-paragraph, level fix and shift. Usage: NB=<notebook id> node test/realkernel.mjs
+import Module from "node:module"; import path from "node:path"; import assert from "node:assert/strict";
+const Orig = Module._load;
+class Plugin { constructor(){ this.i18n={}; } async loadData(){ return {}; } async saveData(){} addTopBar(){} addCommand(){} }
+Module._load = function (r, ...a) { return r === "siyuan" ? { Plugin, Dialog: class {}, showMessage() {}, confirm() {}, getFrontend: () => "desktop" } : Orig.call(this, r, ...a); };
+const f = globalThis.fetch; globalThis.fetch = (p, o) => f("http://127.0.0.1:6806" + p, o);
+const post = async (p, b) => (await (await f("http://127.0.0.1:6806" + p, { method: "POST", body: JSON.stringify(b) })).json()).data;
+const { createRequire } = await import("node:module"); const P = createRequire(import.meta.url)(path.resolve("index.js")); const core = createRequire(import.meta.url)(path.resolve("src/core.js"));
+const wait = (ms) => new Promise((s) => setTimeout(s, ms));
+const md = "# 第一章 总则\n\n## 第一节 范围\n\n#### 这是一段被OCR误识别为标题的很长的句子，它其实是正文内容。\n\n## 小标题\n\n### Short **bold** title\n\n# 这也是句子。\n";
+const doc = await post("/api/filetree/createDocWithMd", { notebook: process.env.NB, path: "/tidy-" + Date.now(), markdown: md }); await wait(3000);
+const p = new P(); await p.onload();
+let heads = await p.load(doc); console.log(JSON.stringify(heads.map((h) => h.level + ":" + h.text)));
+assert.equal(heads.length, 6); assert.deepEqual(heads.map((h) => h.level), [1, 2, 4, 2, 3, 1], "document order and levels");
+const a = core.analyze(heads); assert.deepEqual(a.filter((h) => h.suggest).map((h) => h.text), ["这是一段被OCR误识别为标题的很长的句子，它其实是正文内容。", "这也是句子。"]);
+assert.equal(a[2].skipped, true);
+const drop = a.filter((h) => h.suggest).map((h) => h.id);
+const plan = drop.map((id) => ({ id, to: 0 })).concat(core.fixLevels(heads, drop));
+assert.equal(await p.apply(plan), 2 + plan.length - 2); await wait(2500);
+const rows = await post("/api/query/sql", { stmt: `SELECT id, type, subtype, markdown FROM blocks WHERE root_id='${doc}' AND type IN ('h','p') ORDER BY id` });
+const byId = Object.fromEntries(rows.map((r) => [r.id, r])); console.log(JSON.stringify(rows.map((r) => r.type + (r.subtype || "") + " " + r.markdown)));
+for (const id of drop) assert.equal(byId[id].type, "p", "converted block keeps its id and is now a paragraph");
+assert.ok(/^第一节|^## 第一节/.test(byId[heads[1].id].markdown));
+heads = await p.load(doc); assert.deepEqual(heads.map((h) => h.level), [1, 2, 2, 3], "after conversion: 4 headings, no skipped level");
+assert.ok(heads.some((h) => h.text === "Short bold title") && /\*\*bold\*\*/.test(byId[heads[3].id].markdown), "inline formatting kept");
+const r = core.shift(heads, -1); assert.deepEqual(r.blocked, [heads[0].id, heads[1].id, heads[2].id].filter((_, i) => heads[i].level + -1 < 1));
+const r2 = core.shift(heads, 1); assert.equal(await p.apply(r2.changes), 4); await wait(2500);
+heads = await p.load(doc); assert.deepEqual(heads.map((h) => h.level), [2, 3, 3, 4], "demote all");
+await post("/api/filetree/removeDocByID", { id: doc });
+console.log("real kernel OK");
