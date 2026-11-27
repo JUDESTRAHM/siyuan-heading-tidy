@@ -12,7 +12,7 @@ A free SiYuan plugin for the document you have open. It finds headings that are 
 ## How to use
 Open a document, click the Heading Tidy icon in the top bar (or run the command "Open Heading Tidy"), check the suggested rows, press a button and confirm.
 
-Every change can be rolled back from the document history (right click the document, History).
+SiYuan's document history (right click the document, History) keeps earlier versions of your notes; check it before large changes.
 
 ## Notes
 - Works on one document at a time.
